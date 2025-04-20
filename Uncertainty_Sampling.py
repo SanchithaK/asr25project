@@ -22,7 +22,10 @@ import heapq
 
 import boto3
 
+os.makedirs("results", exist_ok=True)
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 
 """## Data Class"""
@@ -243,7 +246,7 @@ increment = 200"""
 initial_size = 2
 increment = 1
 #max_size = int(0.8 * len(train_ds))
-max_size = int(0.8 * len(train_subset))
+max_size = int(0.5 * len(train_subset))
 n_simulations = 5
 
 # I commented these 2 lines
@@ -288,7 +291,8 @@ def get_uncertainty_scores(model, dataset, unlabeled_indices):
 query_size = 100"""
 initial_size = 2
 query_size = 1
-max_size = int(0.8 * len(train_ds))
+#max_size = int(0.8 * len(train_ds))
+max_size = int(0.5 * len(train_subset))
 n_simulations = 5
 
 train_results, test_results = {}, {}
