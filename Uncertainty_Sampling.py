@@ -242,7 +242,8 @@ def evaluate_model_on_subset(dataset, subset_indices, test_loader, epochs=5):
 increment = 200"""
 initial_size = 2
 increment = 1
-max_size = int(0.8 * len(train_ds))
+#max_size = int(0.8 * len(train_ds))
+max_size = int(0.8 * len(train_subset))
 n_simulations = 5
 
 # I commented these 2 lines
