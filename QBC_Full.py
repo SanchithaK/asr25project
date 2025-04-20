@@ -240,7 +240,7 @@ def evaluate_model_on_subset(dataset, subset_indices, test_loader, epochs=5):
     return final_train_dice, final_test_dice
 
 initial_size = 100
-increment = 100
+increment = 200
 #initial_size = 2
 #increment = 1
 max_size = int(0.5 * len(train_ds))
@@ -275,7 +275,7 @@ def get_qbc_scores(committee, dataset, unlabeled_indices):
     return list(zip(mean_variance, unlabeled_indices))
 
 initial_size = 100
-query_size = 100
+query_size = 200
 #initial_size = 2
 #query_size = 1
 max_size = int(0.5 * len(train_ds))
