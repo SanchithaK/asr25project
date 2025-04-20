@@ -22,8 +22,6 @@ import boto3
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-os.makedirs("results", exist_ok=True)
-
 
 """## Data Class"""
 
@@ -70,9 +68,9 @@ def unpad_to_shape(x, original_h, original_w):
 
 """## Load Data"""
 
-train_ds = CellSegmentationDataset("../../Data/images_train", "../../Data/masks_train")
-val_ds =  CellSegmentationDataset("../../Data/images_val", "../../Data/masks_val")
-test_ds = CellSegmentationDataset("../../Data/images_test", "../../Data/masks_test")
+train_ds = CellSegmentationDataset("/content/drive/My Drive/Automation_datasubset/images_train", "/content/drive/My Drive/Automation_datasubset/masks_train")
+val_ds =  CellSegmentationDataset("/content/drive/My Drive/Automation_datasubset/images_val", "/content/drive/My Drive/Automation_datasubset/masks_val")
+test_ds = CellSegmentationDataset("/content/drive/My Drive/Automation_datasubset/images_test", "/content/drive/My Drive/Automation_datasubset/masks_test")
 
 # Do this on full dataset
 """train_loader = DataLoader(train_ds, batch_size=4, shuffle=True)
@@ -191,6 +189,9 @@ model = smp.Unet(
 
 """# Passive Learning Style vs QBC Training"""
 
+"""# Passive Learning Style vs QBC Training"""
+# Cleaned version
+
 def evaluate_model_on_subset(dataset, subset_indices, test_loader, epochs=5):
     subset = Subset(dataset, subset_indices)
     loader = DataLoader(subset, batch_size=4, shuffle=True)
@@ -279,6 +280,369 @@ initial_size = 2
 query_size = 1
 #max_size = int(0.5 * len(train_ds))
 max_size = int(0.5 * len(train_subset))
+n_simulations = 5
+
+train_results, test_results = {}, {}
+
+for sim in range(n_simulations):
+    random.seed(sim)
+    #all_indices = list(range(len(train_ds)))
+    all_indices = list(range(len(train_subset)))
+    random.shuffle(all_indices)
+    labeled_indices = all_indices[:initial_size]
+    unlabeled_indices = all_indices[initial_size:]
+
+    while len(labeled_indices) <= max_size:
+        print(f"Training on {len(labeled_indices)} samples...")
+
+        #train_dice, test_dice = evaluate_model_on_subset(train_ds, labeled_indices, test_loader)
+        train_dice, test_dice = evaluate_model_on_subset(train_subset, labeled_indices, test_loader)
+        print(f" Train Dice = {train_dice:.4f}", f" Test Dice = {test_dice:.4f}")
+
+        train_results.setdefault(len(labeled_indices), []).append(train_dice)
+        test_results.setdefault(len(labeled_indices), []).append(test_dice)
+
+        if len(labeled_indices) + query_size > max_size:
+            break
+
+        # Train committee models
+        committee = []
+        for _ in range(3):  # size of committee
+            model = smp.Unet("resnet34", encoder_weights="imagenet", in_channels=1, classes=1, activation="sigmoid").to(device)
+            #loader = DataLoader(Subset(train_ds, labeled_indices), batch_size=4, shuffle=True)
+            loader = DataLoader(Subset(train_subset, labeled_indices), batch_size=4, shuffle=True)
+            optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+            loss_fn = smp.losses.DiceLoss(mode='binary')
+            model.train()
+            for epoch in range(3):  # small number of epochs
+                for imgs, masks, _ in loader:
+                    imgs, masks = imgs.to(device), masks.to(device)
+                    preds = model(imgs)
+                    loss = loss_fn(preds, masks)
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+            committee.append(model)
+
+        #scores = get_qbc_scores(committee, train_ds, unlabeled_indices)
+        scores = get_qbc_scores(committee, train_subset, unlabeled_indices)
+        scores.sort(reverse=True)  # High variance = high disagreement
+        selected = [idx for _, idx in scores[:query_size]]
+
+        labeled_indices += selected
+        unlabeled_indices = list(set(unlabeled_indices) - set(selected))
+# End QBC Part
+
+
+# Passive Learning Part
+pl_train_results, pl_test_results = {}, {}
+for sim in range(n_simulations):
+    random.seed(sim)
+    shuffled_indices = all_indices.copy()
+    random.shuffle(shuffled_indices)
+    for size in dataset_sizes:
+        current_subset = shuffled_indices[:size]  # always includes previous ones
+        print(f"  Training on {size} samples...", end="")
+        #train_dice, test_dice = evaluate_model_on_subset(train_ds, current_subset, test_loader)
+        train_dice, test_dice = evaluate_model_on_subset(train_subset, current_subset, test_loader)
+        print(f" Train Dice = {train_dice:.4f}", f" Test Dice = {test_dice:.4f}")
+        pl_train_results.setdefault(size, []).append(train_dice)
+        pl_test_results.setdefault(size, []).append(test_dice)
+
+
+# Function to plot train/test dice scores
+def plot_train_test(train_results, test_results, dataset_sizes, title, filename_prefix, color_train, color_test):
+    train_means = np.array([np.mean(train_results[s]) for s in dataset_sizes])
+    train_stds = np.array([np.std(train_results[s]) for s in dataset_sizes])
+    test_means = np.array([np.mean(test_results[s]) for s in dataset_sizes])
+    test_stds = np.array([np.std(test_results[s]) for s in dataset_sizes])
+
+    plt.figure(figsize=(8, 6))
+    plt.plot(dataset_sizes, train_means, '-o', label='Train Dice', color=color_train)
+    plt.plot(dataset_sizes, test_means, '-o', label='Test Dice', color=color_test)
+    plt.fill_between(dataset_sizes, train_means - train_stds, train_means + train_stds, alpha=0.3, color=color_train)
+    plt.fill_between(dataset_sizes, test_means - test_stds, test_means + test_stds, alpha=0.3, color=color_test)
+    plt.title(title)
+    plt.xlabel("Training Set Size")
+    plt.ylabel("Mean Dice Score")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    filename = f"{filename_prefix}.png"
+    plt.savefig(filename, dpi=300)
+    plt.close()
+    print(f"Saved {filename}")
+    return filename
+
+# Dataset sizes (must match keys in results dicts)
+dataset_sizes = sorted(train_results.keys())
+
+# === Generate and Save Plots ===
+file1 = plot_train_test(train_results, test_results, dataset_sizes,
+                        "Uncertainty Sampling: Dice Scores vs Training Set Size",
+                        "UncertaintySampling_DiceScores", color_train="blue", color_test="orange")
+
+file2 = plot_train_test(pl_train_results, pl_test_results, dataset_sizes,
+                        "Passive Learning: Dice Scores vs Training Set Size",
+                        "PassiveLearning_DiceScores", color_train="green", color_test="red")
+
+# === Comparison Plot ===
+def plot_combined_comparison(dataset_sizes, us_train, us_test, pl_train, pl_test):
+    def get_stats(data):
+        return np.array([np.mean(data[s]) for s in dataset_sizes]), np.array([np.std(data[s]) for s in dataset_sizes])
+    
+    us_train_mean, us_train_std = get_stats(us_train)
+    us_test_mean, us_test_std = get_stats(us_test)
+    pl_train_mean, pl_train_std = get_stats(pl_train)
+    pl_test_mean, pl_test_std = get_stats(pl_test)
+
+    plt.figure(figsize=(10, 7))
+    # Uncertainty
+    plt.plot(dataset_sizes, us_train_mean, '-o', label='US Train', color='blue')
+    plt.fill_between(dataset_sizes, us_train_mean - us_train_std, us_train_mean + us_train_std, alpha=0.2, color='blue')
+    plt.plot(dataset_sizes, us_test_mean, '-o', label='US Test', color='orange')
+    plt.fill_between(dataset_sizes, us_test_mean - us_test_std, us_test_mean + us_test_std, alpha=0.2, color='orange')
+    # Passive
+    plt.plot(dataset_sizes, pl_train_mean, '-s', label='PL Train', color='green')
+    plt.fill_between(dataset_sizes, pl_train_mean - pl_train_std, pl_train_mean + pl_train_std, alpha=0.2, color='green')
+    plt.plot(dataset_sizes, pl_test_mean, '-s', label='PL Test', color='red')
+    plt.fill_between(dataset_sizes, pl_test_mean - pl_test_std, pl_test_mean + pl_test_std, alpha=0.2, color='red')
+
+    plt.title("Comparison: Dice Scores vs Training Set Size")
+    plt.xlabel("Training Set Size")
+    plt.ylabel("Mean Dice Score")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    filename = "Comparison_DiceScores.png"
+    plt.savefig(filename, dpi=300)
+    plt.close()
+    print(f"Saved {filename}")
+    return filename
+
+file3 = plot_combined_comparison(dataset_sizes, train_results, test_results, pl_train_results, pl_test_results)
+
+# === Save CSVs ===
+csv_files = []
+def save_df(data, name):
+    df = pd.DataFrame(data)
+    filename = f"{name}.csv"
+    df.to_csv(filename, index=False)
+    print(f"Saved {filename}")
+    csv_files.append(filename)
+    return filename
+
+save_df(train_results, "UncertaintySamplingTrainDiceScores")
+save_df(test_results, "UncertaintySamplingTestDiceScores")
+save_df(pl_train_results, "PassiveLearningTrainDiceScores")
+save_df(pl_test_results, "PassiveLearningTestDiceScores")
+
+"""# Plotting
+# Uncertainty Sampling
+us_train_means = np.array([np.mean(train_results[s]) for s in dataset_sizes])
+us_train_std = np.array([np.std(train_results[s]) for s in dataset_sizes])
+plt.plot(dataset_sizes, us_train_means, '-o', label='Uncertainty Sampling')
+plt.fill_between(dataset_sizes, us_train_means - us_train_std, us_train_means + us_train_std, alpha=0.3)
+
+# Passive Learning
+pl_train_means = np.array([np.mean(pl_train_results[s]) for s in dataset_sizes])
+pl_train_std = np.array([np.std(pl_train_results[s]) for s in dataset_sizes])
+plt.plot(dataset_sizes, pl_train_means, '-s', label='Passive Learning')
+plt.fill_between(dataset_sizes, pl_train_means - pl_train_std, pl_train_means + pl_train_std, alpha=0.3)
+
+plt.title("Comparison: Train Dice Score vs Training Set Size")
+plt.xlabel("Training Set Size")
+plt.ylabel("Mean Train Set Dice Score")
+plt.legend()
+plt.grid(True)
+plt.savefig("CompareTrainDiceScore_QBC_vs_Passive.png", bbox_inches='tight')
+plt.show()
+
+
+# Uncertainty Sampling
+us_means = np.array([np.mean(test_results[s]) for s in dataset_sizes])
+us_std = np.array([np.std(test_results[s]) for s in dataset_sizes])
+plt.plot(dataset_sizes, us_means, '-o', label='Uncertainty Sampling')
+plt.fill_between(dataset_sizes, us_means - us_std, us_means + us_std, alpha=0.3)
+
+# Passive Learning
+pl_means = np.array([np.mean(pl_test_results[s]) for s in dataset_sizes])
+pl_std = np.array([np.std(pl_test_results[s]) for s in dataset_sizes])
+plt.plot(dataset_sizes, pl_means, '-s', label='Passive Learning')
+plt.fill_between(dataset_sizes, pl_means - pl_std, pl_means + pl_std, alpha=0.3)
+
+# Labels
+plt.title("Comparison: Test Dice Score vs Training Set Size")
+plt.xlabel("Training Set Size")
+plt.ylabel("Mean Test Set Dice Score")
+plt.legend()
+plt.grid(True)
+plt.savefig("CompareTestDiceScore_QBC_vs_Passive.png", bbox_inches='tight')
+print("Saved Comparison Figure")
+plt.show()
+
+means = np.array([np.mean(train_results[s]) for s in dataset_sizes])
+std_dev = np.array([np.std(train_results[s]) for s in dataset_sizes])
+plt.plot(dataset_sizes, means, '-o')
+plt.fill_between(dataset_sizes, means - std_dev, means + std_dev, alpha=0.3)
+#plt.errorbar(dataset_sizes, means, yerr=std_dev, fmt='-o', capsize=5)
+plt.title("QBC: Mean Training Dice Score vs Training Set Size")
+plt.xlabel("Training Set Size")
+plt.ylabel("Mean Train Set Dice Score")
+plt.grid(True)
+plt.savefig("QBCMeanTrainingDiceScoreLighterRun.png", bbox_inches='tight')
+print("Saved Figure")
+plt.show()
+
+means = np.array([np.mean(test_results[s]) for s in dataset_sizes])
+std_dev = np.array([np.std(test_results[s]) for s in dataset_sizes])
+plt.plot(dataset_sizes, means, '-o')
+plt.fill_between(dataset_sizes, means - std_dev, means + std_dev, alpha=0.3)
+#plt.errorbar(dataset_sizes, means, yerr=std_dev, fmt='-o', capsize=5)
+plt.title("QBC: Mean Test Set Dice Score vs Training Set Size")
+plt.xlabel("Training Set Size")
+plt.ylabel("Mean Test Set Dice Score")
+plt.grid(True)
+plt.savefig("QBCMeanTestDiceScoreLighterRun.png", bbox_inches='tight')
+print("Saved Figure")
+plt.show()
+
+
+train_df = pd.DataFrame(train_results)
+train_df.to_csv("QBCTrainDiceScoresLighterRun.csv", index=False)
+
+test_df = pd.DataFrame(test_results)
+test_df.to_csv("QBCTestDiceScoresLighterRun.csv", index=False)
+
+pl_train_df = pd.DataFrame(pl_train_results)
+pl_train_df.to_csv("PassiveLearningTrainDiceScoresLighterRun.csv", index=False)
+
+pl_test_df = pd.DataFrame(pl_test_results)
+pl_test_df.to_csv("PassiveLearningTestDiceScoresLighterRun.csv", index=False)"""
+
+print("Saved train/test Dice scores to CSV")
+
+#torch.save(model.state_dict(), "resnet34_model_all_data.pt")
+
+# I commented from here
+BUCKET_NAME = 'asr25project'
+
+# Initialize the boto3 S3 client
+s3 = boto3.client('s3')
+
+"""# Upload individual files
+#s3.upload_file('resnet34_model_all_data.pt', BUCKET_NAME, 'resnet34_model_all_data.pt')
+s3.upload_file('PassiveLearningTrainDiceScoresLighterRun.csv', BUCKET_NAME, 'PassiveLearningTrainDiceScoresLighterRun.csv')
+s3.upload_file('PassiveLearningTestDiceScoresLighterRun.csv', BUCKET_NAME, 'PassiveLearningTestDiceScoresLighterRun.csv')
+s3.upload_file('CompareTestDiceScore_QBC_vs_Passive.png', BUCKET_NAME, 'CompareTestDiceScore_QBC_vs_Passive.png')
+s3.upload_file('CompareTrainDiceScore_QBC_vs_Passive.png', BUCKET_NAME, 'CompareTrainDiceScore_QBC_vs_Passive.png')
+
+s3.upload_file('QBCTestDiceScoresLighterRun.csv', BUCKET_NAME, 'QBCTestDiceScoresLighterRun.csv')
+s3.upload_file('QBCTrainDiceScoresLighterRun.csv', BUCKET_NAME, 'QBCTrainDiceScoresLighterRun.csv')
+s3.upload_file('QBCMeanTrainingDiceScoreLighterRun.png', BUCKET_NAME, 'QBCMeanTrainingDiceScoreLighterRun.png')
+s3.upload_file('QBCMeanTestDiceScoreLighterRun.png', BUCKET_NAME, 'QBCMeanTestDiceScoreLighterRun.png')"""
+
+# To here
+
+# Upload all files in the 'results/' folder
+# results_dir = 'results'
+# for filename in os.listdir(results_dir):
+#     local_path = os.path.join(results_dir, filename)
+#     s3_path = f"results/{filename}"  # You can customize this path in the bucket
+#     if os.path.isfile(local_path):
+#         print(f"Uploading {local_path} to s3://{BUCKET_NAME}/{s3_path}")
+#         s3.upload_file(local_path, BUCKET_NAME, s3_path)
+
+# I commented this
+#os.system('sudo shutdown now')
+
+
+"""def evaluate_model_on_subset(dataset, subset_indices, test_loader, epochs=5):
+    subset = Subset(dataset, subset_indices)
+    loader = DataLoader(subset, batch_size=4, shuffle=True)
+
+    model = smp.Unet("resnet34", encoder_weights="imagenet", in_channels=1, classes=1, activation="sigmoid").to(device)
+    loss_fn = smp.losses.DiceLoss(mode='binary')
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+    # Training
+    model.train()
+    for _ in range(epochs):
+        for imgs, masks, _ in loader:
+            imgs, masks = imgs.to(device), masks.to(device)
+            preds = model(imgs)
+            loss = loss_fn(preds, masks)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+    # Evaluation on training set after last epoch
+    model.eval()
+    train_dice_scores = []
+    with torch.no_grad():
+        for imgs, masks, _ in loader:
+            imgs, masks = imgs.to(device), masks.to(device)
+            preds = model(imgs)
+            preds_bin = (preds > 0.5).float()
+            intersection = (preds_bin * masks).sum()
+            union = preds_bin.sum() + masks.sum()
+            dice = (2 * intersection) / (union + 1e-8)
+            train_dice_scores.append(dice.item())
+    final_train_dice = np.mean(train_dice_scores)
+
+    # Evaluation on test set
+    model.eval()
+    test_dice_scores = []
+    with torch.no_grad():
+        for img, mask, _ in test_loader:
+            img, mask = img.to(device), mask.to(device)
+            pred = model(img)
+            pred_bin = (pred > 0.5).float()
+            inter = (pred_bin * mask).sum()
+            union = pred_bin.sum() + mask.sum()
+            dice = (2 * inter) / (union + 1e-8)
+            test_dice_scores.append(dice.item())
+    final_test_dice = np.mean(test_dice_scores)
+    return final_train_dice, final_test_dice
+
+#initial_size = 100
+#increment = 200
+initial_size = 2
+increment = 1
+max_size = int(0.8 * len(train_ds))
+n_simulations = 5
+
+# I commented these 2 lines
+#all_indices = list(range(len(train_ds)))
+#dataset_sizes = list(range(initial_size, max_size + 1, increment))
+
+all_indices = list(range(len(train_subset)))
+dataset_sizes = list(range(initial_size, max_size + 1, increment))
+
+# QBC Part:
+def get_qbc_scores(committee, dataset, unlabeled_indices):
+    committee_preds = []
+
+    for model in committee:
+        model.eval()
+        preds = []
+        with torch.no_grad():
+            for idx in unlabeled_indices:
+                img, _, _ = dataset[idx]
+                img = img.unsqueeze(0).to(device)
+                pred = model(img).cpu().numpy()
+                preds.append(pred.squeeze())
+        committee_preds.append(np.array(preds))  # (N_unlabeled, H, W)
+
+    committee_preds = np.stack(committee_preds, axis=0)  # (C, N, H, W)
+    var_map = np.var(committee_preds, axis=0)  # (N, H, W)
+    mean_variance = var_map.mean(axis=(1, 2))  # per sample
+    return list(zip(mean_variance, unlabeled_indices))
+
+#initial_size = 100
+#query_size = 100
+initial_size = 2
+query_size = 1
+max_size = int(0.8 * len(train_ds))
 n_simulations = 5
 
 train_results, test_results = {}, {}
@@ -425,15 +789,14 @@ pl_train_df = pd.DataFrame(pl_train_results)
 pl_train_df.to_csv("PassiveLearningTrainDiceScoresLighterRun.csv", index=False)
 
 pl_test_df = pd.DataFrame(pl_test_results)
-pl_test_df.to_csv("PassiveLearningTestDiceScoresLighterRun.csv", index=False)
+pl_test_df.to_csv("PassiveLearningTestDiceScoresLighterRun.csv", index=False)"""
 
-print("Saved train/test Dice scores to CSV")
 
 print("Saved train/test Dice scores to CSV")
 
 #torch.save(model.state_dict(), "resnet34_model_all_data.pt")
 
-# I commented from here
+"""# I commented from here
 BUCKET_NAME = 'asr25project'
 
 # Initialize the boto3 S3 client
@@ -449,9 +812,18 @@ s3.upload_file('CompareTrainDiceScore_QBC_vs_Passive.png', BUCKET_NAME, 'Compare
 s3.upload_file('QBCTestDiceScoresLighterRun.csv', BUCKET_NAME, 'QBCTestDiceScoresLighterRun.csv')
 s3.upload_file('QBCTrainDiceScoresLighterRun.csv', BUCKET_NAME, 'QBCTrainDiceScoresLighterRun.csv')
 s3.upload_file('QBCMeanTrainingDiceScoreLighterRun.png', BUCKET_NAME, 'QBCMeanTrainingDiceScoreLighterRun.png')
-s3.upload_file('QBCMeanTestDiceScoreLighterRun.png', BUCKET_NAME, 'QBCMeanTestDiceScoreLighterRun.png')
+s3.upload_file('QBCMeanTestDiceScoreLighterRun.png', BUCKET_NAME, 'QBCMeanTestDiceScoreLighterRun.png')"""
 
 # To here
+
+# Upload all plots and CSVs
+BUCKET_NAME = 'asr25data'
+s3 = boto3.client('s3')
+
+all_files = [file1, file2, file3] + csv_files
+for fname in all_files:
+    s3.upload_file(fname, BUCKET_NAME, f"results/{fname}")
+    print(f"Uploaded {fname} to s3://{BUCKET_NAME}/{fname}")
 
 # Upload all files in the 'results/' folder
 # results_dir = 'results'

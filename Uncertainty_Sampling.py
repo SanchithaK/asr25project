@@ -22,10 +22,7 @@ import heapq
 
 import boto3
 
-os.makedirs("results", exist_ok=True)
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
 
 
 """## Data Class"""
@@ -73,9 +70,9 @@ def unpad_to_shape(x, original_h, original_w):
 
 """## Load Data"""
 
-train_ds = CellSegmentationDataset("../../Data/images_train", "../../Data/masks_train")
-val_ds =  CellSegmentationDataset("../../Data/images_val", "../../Data/masks_val")
-test_ds = CellSegmentationDataset("../../Data/images_test", "../../Data/masks_test")
+train_ds = CellSegmentationDataset("/content/drive/My Drive/Automation_datasubset/images_train", "/content/drive/My Drive/Automation_datasubset/masks_train")
+val_ds =  CellSegmentationDataset("/content/drive/My Drive/Automation_datasubset/images_val", "/content/drive/My Drive/Automation_datasubset/masks_val")
+test_ds = CellSegmentationDataset("/content/drive/My Drive/Automation_datasubset/images_test", "/content/drive/My Drive/Automation_datasubset/masks_test")
 
 # Do this on full dataset
 """train_loader = DataLoader(train_ds, batch_size=4, shuffle=True)
@@ -193,6 +190,7 @@ model = smp.Unet(
 #     show_prediction(img, mask, filename=fname)
 
 """# Uncertainty va Passive Learning Style Training - Uncertainty based on entropy"""
+# Final Version - cleaned to work on subset data
 
 def evaluate_model_on_subset(dataset, subset_indices, test_loader, epochs=5):
     subset = Subset(dataset, subset_indices)
@@ -299,7 +297,8 @@ train_results, test_results = {}, {}
 
 for sim in range(n_simulations):
     random.seed(sim)
-    all_indices = list(range(len(train_ds)))
+    #all_indices = list(range(len(train_ds)))
+    all_indices = list(range(len(train_subset)))
     random.shuffle(all_indices)
     labeled_indices = all_indices[:initial_size]
     unlabeled_indices = all_indices[initial_size:]
@@ -307,7 +306,8 @@ for sim in range(n_simulations):
     while len(labeled_indices) <= max_size:
         print(f"Training on {len(labeled_indices)} samples...")
 
-        train_dice, test_dice = evaluate_model_on_subset(train_ds, labeled_indices, test_loader)
+        #train_dice, test_dice = evaluate_model_on_subset(train_ds, labeled_indices, test_loader)
+        train_dice, test_dice = evaluate_model_on_subset(train_subset, labeled_indices, test_loader)
         print(f" Train Dice = {train_dice:.4f}", f" Test Dice = {test_dice:.4f}")
 
         train_results.setdefault(len(labeled_indices), []).append(train_dice)
@@ -333,7 +333,8 @@ for sim in range(n_simulations):
                 optimizer.step()
 
         # Select most uncertain samples
-        scores = get_uncertainty_scores(model, train_ds, unlabeled_indices)
+        #scores = get_uncertainty_scores(model, train_ds, unlabeled_indices)
+        scores = get_uncertainty_scores(model, train_subset, unlabeled_indices)
         scores.sort()  # Sort by uncertainty (closest to 0.5)
         selected = [idx for _, idx in scores[:query_size]]
 
@@ -351,12 +352,102 @@ for sim in range(n_simulations):
     for size in dataset_sizes:
         current_subset = shuffled_indices[:size]  # always includes previous ones
         print(f"  Training on {size} samples...", end="")
-        train_dice, test_dice = evaluate_model_on_subset(train_ds, current_subset, test_loader)
+        #train_dice, test_dice = evaluate_model_on_subset(train_ds, current_subset, test_loader)
+        train_dice, test_dice = evaluate_model_on_subset(train_subset, current_subset, test_loader)
         print(f" Train Dice = {train_dice:.4f}", f" Test Dice = {test_dice:.4f}")
         pl_train_results.setdefault(size, []).append(train_dice)
         pl_test_results.setdefault(size, []).append(test_dice)
 
-# Plotting
+# Function to plot train/test dice scores
+def plot_train_test(train_results, test_results, dataset_sizes, title, filename_prefix, color_train, color_test):
+    train_means = np.array([np.mean(train_results[s]) for s in dataset_sizes])
+    train_stds = np.array([np.std(train_results[s]) for s in dataset_sizes])
+    test_means = np.array([np.mean(test_results[s]) for s in dataset_sizes])
+    test_stds = np.array([np.std(test_results[s]) for s in dataset_sizes])
+
+    plt.figure(figsize=(8, 6))
+    plt.plot(dataset_sizes, train_means, '-o', label='Train Dice', color=color_train)
+    plt.plot(dataset_sizes, test_means, '-o', label='Test Dice', color=color_test)
+    plt.fill_between(dataset_sizes, train_means - train_stds, train_means + train_stds, alpha=0.3, color=color_train)
+    plt.fill_between(dataset_sizes, test_means - test_stds, test_means + test_stds, alpha=0.3, color=color_test)
+    plt.title(title)
+    plt.xlabel("Training Set Size")
+    plt.ylabel("Mean Dice Score")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    filename = f"{filename_prefix}.png"
+    plt.savefig(filename, dpi=300)
+    plt.close()
+    print(f"Saved {filename}")
+    return filename
+
+# Dataset sizes (must match keys in results dicts)
+dataset_sizes = sorted(train_results.keys())
+
+# === Generate and Save Plots ===
+file1 = plot_train_test(train_results, test_results, dataset_sizes,
+                        "Uncertainty Sampling: Dice Scores vs Training Set Size",
+                        "UncertaintySampling_DiceScores", color_train="blue", color_test="orange")
+
+file2 = plot_train_test(pl_train_results, pl_test_results, dataset_sizes,
+                        "Passive Learning: Dice Scores vs Training Set Size",
+                        "PassiveLearning_DiceScores", color_train="green", color_test="red")
+
+# === Comparison Plot ===
+def plot_combined_comparison(dataset_sizes, us_train, us_test, pl_train, pl_test):
+    def get_stats(data):
+        return np.array([np.mean(data[s]) for s in dataset_sizes]), np.array([np.std(data[s]) for s in dataset_sizes])
+    
+    us_train_mean, us_train_std = get_stats(us_train)
+    us_test_mean, us_test_std = get_stats(us_test)
+    pl_train_mean, pl_train_std = get_stats(pl_train)
+    pl_test_mean, pl_test_std = get_stats(pl_test)
+
+    plt.figure(figsize=(10, 7))
+    # Uncertainty
+    plt.plot(dataset_sizes, us_train_mean, '-o', label='US Train', color='blue')
+    plt.fill_between(dataset_sizes, us_train_mean - us_train_std, us_train_mean + us_train_std, alpha=0.2, color='blue')
+    plt.plot(dataset_sizes, us_test_mean, '-o', label='US Test', color='orange')
+    plt.fill_between(dataset_sizes, us_test_mean - us_test_std, us_test_mean + us_test_std, alpha=0.2, color='orange')
+    # Passive
+    plt.plot(dataset_sizes, pl_train_mean, '-s', label='PL Train', color='green')
+    plt.fill_between(dataset_sizes, pl_train_mean - pl_train_std, pl_train_mean + pl_train_std, alpha=0.2, color='green')
+    plt.plot(dataset_sizes, pl_test_mean, '-s', label='PL Test', color='red')
+    plt.fill_between(dataset_sizes, pl_test_mean - pl_test_std, pl_test_mean + pl_test_std, alpha=0.2, color='red')
+
+    plt.title("Comparison: Dice Scores vs Training Set Size")
+    plt.xlabel("Training Set Size")
+    plt.ylabel("Mean Dice Score")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    filename = "Comparison_DiceScores.png"
+    plt.savefig(filename, dpi=300)
+    plt.close()
+    print(f"Saved {filename}")
+    return filename
+
+file3 = plot_combined_comparison(dataset_sizes, train_results, test_results, pl_train_results, pl_test_results)
+
+# === Save CSVs ===
+csv_files = []
+def save_df(data, name):
+    df = pd.DataFrame(data)
+    filename = f"{name}.csv"
+    df.to_csv(filename, index=False)
+    print(f"Saved {filename}")
+    csv_files.append(filename)
+    return filename
+
+save_df(train_results, "UncertaintySamplingTrainDiceScores")
+save_df(test_results, "UncertaintySamplingTestDiceScores")
+save_df(pl_train_results, "PassiveLearningTrainDiceScores")
+save_df(pl_test_results, "PassiveLearningTestDiceScores")
+
+
+"""
+# Plotting Passive vs Uncertainty together - train and test separately
 # Uncertainty Sampling
 us_train_means = np.array([np.mean(train_results[s]) for s in dataset_sizes])
 us_train_std = np.array([np.std(train_results[s]) for s in dataset_sizes])
@@ -400,6 +491,8 @@ plt.savefig("CompareTestDiceScore_Uncertainty_vs_Passive.png", bbox_inches='tigh
 print("Saved Comparison Figure")
 plt.show()
 
+
+# Plotting Uncertainty Sampling Test and Train separately
 means = np.array([np.mean(train_results[s]) for s in dataset_sizes])
 std_dev = np.array([np.std(train_results[s]) for s in dataset_sizes])
 plt.plot(dataset_sizes, means, '-o')
@@ -427,6 +520,27 @@ print("Saved Figure")
 plt.show()
 
 
+# Plotting Combined Test and Train - for Passive and Uncertainty Separately
+plt.figure(figsize=(8, 6))
+plt.plot(dataset_sizes, means_train, label='Train Dice (Mean)', color='blue', marker='o')
+plt.plot(dataset_sizes, means_test, label='Test Dice (Mean)', color='orange', marker='o')
+plt.fill_between(dataset_sizes, means_train - stds_train, means_train + stds_train, color='blue', alpha=0.3)
+plt.fill_between(dataset_sizes, means_test - stds_test, means_test + stds_test, color='orange', alpha=0.3)
+
+# Labels and legend
+plt.title("Passive Learning: Mean Dice Score vs Training Set Size")
+plt.xlabel("Training Set Size")
+plt.ylabel("Mean Dice Score")
+plt.legend()
+plt.legend(loc="lower right", fontsize=12)
+plt.grid(True)
+
+# Save or show
+plt.tight_layout()
+plt.savefig("PassiveLearningMeanBothDiceScoreLighterRun.png", dpi=300)
+plt.show()
+
+# Saving csvs
 train_df = pd.DataFrame(train_results)
 train_df.to_csv("UncertaintySamplingTrainDiceScoresLighterRun.csv", index=False)
 
@@ -437,13 +551,13 @@ pl_train_df = pd.DataFrame(pl_train_results)
 pl_train_df.to_csv("PassiveLearningTrainDiceScoresLighterRun.csv", index=False)
 
 pl_test_df = pd.DataFrame(pl_test_results)
-pl_test_df.to_csv("PassiveLearningTestDiceScoresLighterRun.csv", index=False)
+pl_test_df.to_csv("PassiveLearningTestDiceScoresLighterRun.csv", index=False)"""
 
 print("Saved train/test Dice scores to CSV")
 
 #torch.save(model.state_dict(), "resnet34_model_all_data.pt")
 
-# I commented from here
+"""# I commented from here
 BUCKET_NAME = 'asr25data'
 
 # Initialize the boto3 S3 client
@@ -458,9 +572,19 @@ s3.upload_file('CompareTestDiceScore_Uncertainty_vs_Passive.png', BUCKET_NAME, '
 s3.upload_file('UncertaintySamplingTrainDiceScoresLighterRun.csv', BUCKET_NAME, 'UncertaintySamplingTrainDiceScoresLighterRun.csv')
 s3.upload_file('UncertaintySamplingTestDiceScoresLighterRun.csv', BUCKET_NAME, 'UncertaintySamplingTestDiceScoresLighterRun.csv')
 s3.upload_file('UncertaintySamplingMeanTestDiceScoreLighterRun.png', BUCKET_NAME, 'UncertaintySamplingMeanTestDiceScoreLighterRun.png')
-s3.upload_file('UncertaintySamplingMeanTrainingDiceScoreLighterRun.png', BUCKET_NAME, 'MeanTrainingDiceScoreLighterRun.png')
+s3.upload_file('UncertaintySamplingMeanTrainingDiceScoreLighterRun.png', BUCKET_NAME, 'MeanTrainingDiceScoreLighterRun.png')"""
 
 # To here
+
+# Upload all plots and CSVs
+BUCKET_NAME = 'asr25data'
+s3 = boto3.client('s3')
+
+all_files = [file1, file2, file3] + csv_files
+for fname in all_files:
+    s3.upload_file(fname, BUCKET_NAME, f"results/{fname}")
+    print(f"Uploaded {fname} to s3://{BUCKET_NAME}/{fname}")
+
 
 # Upload all files in the 'results/' folder
 # results_dir = 'results'
