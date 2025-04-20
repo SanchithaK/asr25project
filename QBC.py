@@ -398,9 +398,9 @@ def plot_combined_comparison(dataset_sizes, us_train, us_test, pl_train, pl_test
 
     plt.figure(figsize=(10, 7))
     # Uncertainty
-    plt.plot(dataset_sizes, us_train_mean, '-o', label='US Train', color='blue')
+    plt.plot(dataset_sizes, us_train_mean, '-o', label='QBC Train', color='blue')
     plt.fill_between(dataset_sizes, us_train_mean - us_train_std, us_train_mean + us_train_std, alpha=0.2, color='blue')
-    plt.plot(dataset_sizes, us_test_mean, '-o', label='US Test', color='orange')
+    plt.plot(dataset_sizes, us_test_mean, '-o', label='QBC Test', color='orange')
     plt.fill_between(dataset_sizes, us_test_mean - us_test_std, us_test_mean + us_test_std, alpha=0.2, color='orange')
     # Passive
     plt.plot(dataset_sizes, pl_train_mean, '-s', label='PL Train', color='green')
