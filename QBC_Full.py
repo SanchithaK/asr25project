@@ -275,7 +275,7 @@ def get_qbc_scores(committee, dataset, unlabeled_indices):
     return list(zip(mean_variance, unlabeled_indices))
 
 initial_size = 100
-query_size = 100
+query_size = 200
 #initial_size = 2
 #query_size = 1
 max_size = int(0.5 * len(train_ds))
