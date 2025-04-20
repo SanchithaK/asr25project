@@ -394,8 +394,8 @@ file1 = plot_train_test(train_results, test_results, dataset_sizes,
                         "UncertaintySampling_DiceScores", color_train="blue", color_test="orange")
 
 file2 = plot_train_test(pl_train_results, pl_test_results, dataset_sizes,
-                        "Passive Learning: Dice Scores vs Training Set Size",
-                        "PassiveLearning_DiceScores", color_train="green", color_test="red")
+                        "Passive Learning - US: Dice Scores vs Training Set Size",
+                        "PassiveLearningUS_DiceScores", color_train="green", color_test="red")
 
 # === Comparison Plot ===
 def plot_combined_comparison(dataset_sizes, us_train, us_test, pl_train, pl_test):
@@ -419,13 +419,13 @@ def plot_combined_comparison(dataset_sizes, us_train, us_test, pl_train, pl_test
     plt.plot(dataset_sizes, pl_test_mean, '-s', label='PL Test', color='red')
     plt.fill_between(dataset_sizes, pl_test_mean - pl_test_std, pl_test_mean + pl_test_std, alpha=0.2, color='red')
 
-    plt.title("Comparison: Dice Scores vs Training Set Size")
+    plt.title("Comparison (US): Dice Scores vs Training Set Size")
     plt.xlabel("Training Set Size")
     plt.ylabel("Mean Dice Score")
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    filename = "Comparison_DiceScores.png"
+    filename = "ComparisonUS_DiceScores.png"
     plt.savefig(filename, dpi=300)
     plt.close()
     print(f"Saved {filename}")
@@ -445,8 +445,8 @@ def save_df(data, name):
 
 save_df(train_results, "UncertaintySamplingTrainDiceScores")
 save_df(test_results, "UncertaintySamplingTestDiceScores")
-save_df(pl_train_results, "PassiveLearningTrainDiceScores")
-save_df(pl_test_results, "PassiveLearningTestDiceScores")
+save_df(pl_train_results, "PassiveLearningUSTrainDiceScores")
+save_df(pl_test_results, "PassiveLearningUSTestDiceScores")
 
 
 """
