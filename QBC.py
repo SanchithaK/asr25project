@@ -22,6 +22,8 @@ import boto3
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+os.makedirs("results", exist_ok=True)
+
 
 """## Data Class"""
 
