@@ -289,7 +289,7 @@ def get_uncertainty_scores(model, dataset, unlabeled_indices):
 
 
 initial_size = 100
-query_size = 100
+query_size = 200
 #initial_size = 2
 #query_size = 1
 max_size = int(0.5 * len(train_ds))
