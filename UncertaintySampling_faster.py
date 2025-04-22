@@ -11,6 +11,23 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import boto3
+
+USE_WARM_START = True
+RESET_EVERY_N = 3  
+
+
+name_extension = "passive_learning_partial_training_aws"
+model_dir = f"{name_extension}/models"
+results_dir = f'{name_extension}/results'
+title_prefix = "Passive Learning"
+plot_dir = f"{name_extension}/plots"
+plots_title_prefix = "Passive Learning"
+
+os.makedirs(results_dir, exist_ok=True)
+os.makedirs(model_dir, exist_ok=True)
+os.makedirs(plot_dir, exist_ok=True)
+
 def set_all_seeds(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -443,6 +460,38 @@ test_df = pd.DataFrame(test_results)
 test_df.to_csv(f"{plot_dir}/TestDiceScores_US_Hoi.csv", index=False)
 
 print("Saved US train/test Dice scores to CSV")
+
+# To save to s3 bucket:
+BUCKET_NAME = 'live-cell-data'
+
+# Initialize the boto3 S3 client
+s3 = boto3.client('s3')
+
+# Upload individual files
+#s3.upload_file('resnet34_model_all_data.pt', BUCKET_NAME, 'resnet34_model_all_data.pt')
+for filename in os.listdir(plot_dir):
+    local_path = os.path.join(plot_dir, filename)
+    s3_path = f"{plot_dir}/{filename}"
+    if os.path.isfile(local_path):
+        print(f"Uploading {local_path} to s3://{BUCKET_NAME}/{s3_path}")
+        s3.upload_file(local_path, BUCKET_NAME, s3_path)
+
+# Upload all files in the results_dir folder
+# for filename in os.listdir(results_dir):
+#     local_path = os.path.join(results_dir, filename)
+#     s3_path = f"{name_extension}/results/{filename}"
+#     if os.path.isfile(local_path):
+#         print(f"Uploading {local_path} to s3://{BUCKET_NAME}/{s3_path}")
+#         s3.upload_file(local_path, BUCKET_NAME, s3_path)
+
+for filename in os.listdir(model_dir):
+    local_path = os.path.join(model_dir, filename)
+    s3_path = f"{model_dir}/{filename}"
+    if os.path.isfile(local_path):
+        print(f"Uploading {local_path} to s3://{BUCKET_NAME}/{s3_path}")
+        s3.upload_file(local_path, BUCKET_NAME, s3_path)
+    
+#os.system('sudo shutdown now')
 
 """# Passive
 means_train = np.array([np.mean(train_results[s]) for s in dataset_sizes])
