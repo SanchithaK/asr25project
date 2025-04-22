@@ -334,10 +334,10 @@ try:
             labeled_indices += selected
             unlabeled_indices = list(set(unlabeled_indices) - set(selected))
     # added to check memory issue
-    except RuntimeError as e:
-        if 'out of memory' in str(e):
-            print("OOM Error! Lower batch size or model size.")
-            torch.cuda.empty_cache()
+except RuntimeError as e:
+     if 'out of memory' in str(e):
+         print("OOM Error! Lower batch size or model size.")
+         torch.cuda.empty_cache()
 # End QBC Part
 
 
