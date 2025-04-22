@@ -442,7 +442,7 @@ train_df.to_csv(f"{plot_dir}/TrainDiceScores_US_Hoi.csv", index=False)
 test_df = pd.DataFrame(test_results)
 test_df.to_csv(f"{plot_dir}/TestDiceScores_US_Hoi.csv", index=False)
 
-print("Saved QBC train/test Dice scores to CSV")
+print("Saved US train/test Dice scores to CSV")
 
 """# Passive
 means_train = np.array([np.mean(train_results[s]) for s in dataset_sizes])
