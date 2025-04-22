@@ -418,7 +418,7 @@ plt.xlabel("Training Set Size")
 plt.ylabel("Mean Train Set Dice Score")
 plt.grid(True)
 plt.savefig(f"{plot_dir}/MeanTrainingDiceScore_US_Hoi.png", bbox_inches='tight')
-plt.show()
+#plt.show()
 
 means_test = np.array([np.mean(test_results[s]) for s in dataset_sizes])
 stds_test = np.array([np.std(test_results[s]) for s in dataset_sizes])
@@ -429,7 +429,7 @@ plt.xlabel("Training Set Size")
 plt.ylabel("Mean Test Set Dice Score")
 plt.grid(True)
 plt.savefig(f"{plot_dir}/MeanTestDiceScore_US_Hoi.png", bbox_inches='tight')
-plt.show()
+#plt.show()
 
 
 plt.figure(figsize=(8, 6))
@@ -449,7 +449,7 @@ plt.grid(True)
 # Save or show
 plt.tight_layout()
 plt.savefig(f"{plot_dir}/MeanBothDiceScore_US_Hoi.png", dpi=300)
-plt.show()
+#plt.show()
 
 print("Saved Figures")
 
@@ -462,7 +462,7 @@ test_df.to_csv(f"{plot_dir}/TestDiceScores_US_Hoi.csv", index=False)
 print("Saved US train/test Dice scores to CSV")
 
 # To save to s3 bucket:
-BUCKET_NAME = 'live-cell-data'
+BUCKET_NAME = 'asr25data'
 
 # Initialize the boto3 S3 client
 s3 = boto3.client('s3')
