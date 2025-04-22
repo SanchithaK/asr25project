@@ -22,12 +22,12 @@ def set_all_seeds(seed):
 USE_WARM_START = True
 RESET_EVERY_N = 3  
 
-name_extension = "passive_learning_partial_training_local"
+name_extension = "QBC_partial_training_local"
 model_dir = f"{name_extension}/models"
 results_dir = f'{name_extension}/results'
-title_prefix = "Passive Learning"
+title_prefix = "QBC Learning"
 plot_dir = f"{name_extension}/plots"
-plots_title_prefix = "Passive Learning"
+plots_title_prefix = "QBC Learning"
 
 os.makedirs(results_dir, exist_ok=True)
 os.makedirs(model_dir, exist_ok=True)
