@@ -77,10 +77,9 @@ def unpad_to_shape(x, original_h, original_w):
     return x[..., :original_h, :original_w]
 
 """## Load Data"""
-
-train_ds = CellSegmentationDataset("../data/images_train", "../data/masks_train")
-val_ds =  CellSegmentationDataset("../data/images_val", "../data/masks_val")
-test_ds = CellSegmentationDataset("../data/images_test", "../data/masks_test")
+train_ds = CellSegmentationDataset("../../Data/images_train", "../../Data/masks_train")
+val_ds =  CellSegmentationDataset("../../Data/images_val", "../../Data/masks_val")
+test_ds = CellSegmentationDataset("../../Data/images_test", "../../Data/masks_test")
 
 ## Use a small subset due to local compute limitations
 # Randomly pick 10 indices from the training and testing dataset
