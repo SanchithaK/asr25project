@@ -77,6 +77,7 @@ def unpad_to_shape(x, original_h, original_w):
     return x[..., :original_h, :original_w]
 
 """## Load Data"""
+
 train_ds = CellSegmentationDataset("../../Data/images_train", "../../Data/masks_train")
 val_ds =  CellSegmentationDataset("../../Data/images_val", "../../Data/masks_val")
 test_ds = CellSegmentationDataset("../../Data/images_test", "../../Data/masks_test")
@@ -128,6 +129,59 @@ def show_prediction(model, img, mask, results_dir, filename, save=True):
     else:
         plt.show()
     plt.close(fig)
+
+
+"""# Model eval code"""
+
+def evaluate_model_on_subset(dataset, subset_indices, test_loader, epochs=5, warm_model=None, seed = 0):
+    subset = Subset(dataset, subset_indices)
+    loader = DataLoader(subset, batch_size=4, shuffle=True, num_workers = 0)
+    set_all_seeds(seed)
+    model = warm_model if warm_model else smp.Unet("resnet34", encoder_weights="imagenet", in_channels=1, classes=1, activation="sigmoid").to(device)
+    loss_fn = smp.losses.DiceLoss(mode='binary')
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+
+    # Training
+    model.train()
+    for _ in range(epochs):
+        for imgs, masks, _ in loader:
+            imgs, masks = imgs.to(device), masks.to(device)
+            preds = model(imgs)
+            loss = loss_fn(preds, masks)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+
+    # Evaluation on training set after last epoch
+    model.eval()
+    train_dice_scores = []
+    with torch.no_grad():
+        for imgs, masks, _ in loader:
+            imgs, masks = imgs.to(device), masks.to(device)
+            preds = model(imgs)
+            preds_bin = (preds > 0.5).float()
+            intersection = (preds_bin * masks).sum()
+            union = preds_bin.sum() + masks.sum()
+            dice = (2 * intersection) / (union + 1e-8)
+            train_dice_scores.append(dice.item())
+    final_train_dice = np.mean(train_dice_scores)
+
+    # Evaluation on test set
+    model.eval()
+    test_dice_scores = []
+    with torch.no_grad():
+        for img, mask, _ in test_loader:
+            img, mask = img.to(device), mask.to(device)
+            pred = model(img)
+            pred_bin = (pred > 0.5).float()
+            inter = (pred_bin * mask).sum()
+            union = pred_bin.sum() + mask.sum()
+            dice = (2 * inter) / (union + 1e-8)
+            test_dice_scores.append(dice.item())
+    final_test_dice = np.mean(test_dice_scores)
+
+    return final_train_dice, final_test_dice, model
 
 """ # QBC Training"""
 
@@ -275,55 +329,6 @@ for sim in range(n_simulations):
 
 """# Passive Learning Style Training"""
 
-def evaluate_model_on_subset(dataset, subset_indices, test_loader, epochs=5, warm_model=None, seed = 0):
-    subset = Subset(dataset, subset_indices)
-    loader = DataLoader(subset, batch_size=4, shuffle=True, num_workers = 0)
-    set_all_seeds(seed)
-    model = warm_model if warm_model else smp.Unet("resnet34", encoder_weights="imagenet", in_channels=1, classes=1, activation="sigmoid").to(device)
-    loss_fn = smp.losses.DiceLoss(mode='binary')
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-
-    # Training
-    model.train()
-    for _ in range(epochs):
-        for imgs, masks, _ in loader:
-            imgs, masks = imgs.to(device), masks.to(device)
-            preds = model(imgs)
-            loss = loss_fn(preds, masks)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-
-    # Evaluation on training set after last epoch
-    model.eval()
-    train_dice_scores = []
-    with torch.no_grad():
-        for imgs, masks, _ in loader:
-            imgs, masks = imgs.to(device), masks.to(device)
-            preds = model(imgs)
-            preds_bin = (preds > 0.5).float()
-            intersection = (preds_bin * masks).sum()
-            union = preds_bin.sum() + masks.sum()
-            dice = (2 * intersection) / (union + 1e-8)
-            train_dice_scores.append(dice.item())
-    final_train_dice = np.mean(train_dice_scores)
-
-    # Evaluation on test set
-    model.eval()
-    test_dice_scores = []
-    with torch.no_grad():
-        for img, mask, _ in test_loader:
-            img, mask = img.to(device), mask.to(device)
-            pred = model(img)
-            pred_bin = (pred > 0.5).float()
-            inter = (pred_bin * mask).sum()
-            union = pred_bin.sum() + mask.sum()
-            dice = (2 * inter) / (union + 1e-8)
-            test_dice_scores.append(dice.item())
-    final_test_dice = np.mean(test_dice_scores)
-
-    return final_train_dice, final_test_dice, model
 
 """# Passive Learning
 initial_size = 1
@@ -373,47 +378,57 @@ for sim in range(n_simulations):
 
 # QBC
 # Plotting QBC Results
-means_qbc = np.array([np.mean(qbc_results[s]) for s in dataset_sizes])  # Mean QBC Score
-stds_qbc = np.array([np.std(qbc_results[s]) for s in dataset_sizes])  # Standard Deviation of QBC Score
-
-# Plot QBC Mean vs Training Set Size
-plt.plot(dataset_sizes, means_qbc, '-o', label='QBC Score (Mean)', color='green')
-plt.fill_between(dataset_sizes, means_qbc - stds_qbc, means_qbc + stds_qbc, color='green', alpha=0.3)
-plt.title(f"{plots_title_prefix}: Mean QBC Score vs Training Set Size")
+means_train = np.array([np.mean(train_results[s]) for s in dataset_sizes])
+stds_train = np.array([np.std(train_results[s]) for s in dataset_sizes])
+plt.plot(dataset_sizes, means_train, '-o')
+plt.fill_between(dataset_sizes, means_train - stds_train, means_train + stds_train, alpha=0.3)
+plt.title(f"{plots_title_prefix}: Mean Training Dice Score vs Training Set Size")
 plt.xlabel("Training Set Size")
-plt.ylabel("Mean QBC Score")
+plt.ylabel("Mean Train Set Dice Score")
 plt.grid(True)
-plt.savefig(f"{plot_dir}/MeanQBCScore.png", bbox_inches='tight')
+plt.savefig(f"{plot_dir}/MeanTrainingDiceScore_QBC_Hoi.png", bbox_inches='tight')
 plt.show()
 
-# Plot QBC Mean and Train/Test Dice Score for Comparison
+means_test = np.array([np.mean(test_results[s]) for s in dataset_sizes])
+stds_test = np.array([np.std(test_results[s]) for s in dataset_sizes])
+plt.plot(dataset_sizes, means_test, '-o')
+plt.fill_between(dataset_sizes, means_test - stds_test, means_test + stds_test, alpha=0.3)
+plt.title(f"{plots_title_prefix}: Mean Test Set Dice Score vs Training Set Size")
+plt.xlabel("Training Set Size")
+plt.ylabel("Mean Test Set Dice Score")
+plt.grid(True)
+plt.savefig(f"{plot_dir}/MeanTestDiceScore_QBC_Hoi.png", bbox_inches='tight')
+plt.show()
+
+
 plt.figure(figsize=(8, 6))
-plt.plot(dataset_sizes, means_qbc, label='QBC Score (Mean)', color='green', marker='o')
 plt.plot(dataset_sizes, means_train, label='Train Dice (Mean)', color='blue', marker='o')
 plt.plot(dataset_sizes, means_test, label='Test Dice (Mean)', color='orange', marker='o')
-plt.fill_between(dataset_sizes, means_qbc - stds_qbc, means_qbc + stds_qbc, color='green', alpha=0.3)
 plt.fill_between(dataset_sizes, means_train - stds_train, means_train + stds_train, color='blue', alpha=0.3)
 plt.fill_between(dataset_sizes, means_test - stds_test, means_test + stds_test, color='orange', alpha=0.3)
 
 # Labels and legend
-plt.title(f"{plots_title_prefix}: Mean QBC Score vs Training Set Size (with Train/Test Dice)")
+plt.title(f"{plots_title_prefix}: Mean Dice Score vs Training Set Size")
 plt.xlabel("Training Set Size")
-plt.ylabel("Scores")
+plt.ylabel("Mean Dice Score")
+plt.legend()
 plt.legend(loc="lower right", fontsize=12)
 plt.grid(True)
 
 # Save or show
 plt.tight_layout()
-plt.savefig(f"{plot_dir}/MeanQBCTrainTestDiceScore.png", dpi=300)
+plt.savefig(f"{plot_dir}/MeanBothDiceScore_QBC_Hoi.png", dpi=300)
 plt.show()
 
-print("Saved QBC Score Figures")
+print("Saved Figures")
 
-# Save the QBC results to CSV
-qbc_df = pd.DataFrame(qbc_results)
-qbc_df.to_csv(f"{plot_dir}/QBCScores.csv", index=False)
+train_df = pd.DataFrame(train_results)
+train_df.to_csv(f"{plot_dir}/TrainDiceScores_QBC_Hoi.csv", index=False)
 
-print("Saved QBC scores to CSV")
+test_df = pd.DataFrame(test_results)
+test_df.to_csv(f"{plot_dir}/TestDiceScores_QBC_Hoi.csv", index=False)
+
+print("Saved QBC train/test Dice scores to CSV")
 
 """# Passive
 means_train = np.array([np.mean(train_results[s]) for s in dataset_sizes])
