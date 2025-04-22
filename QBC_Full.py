@@ -283,54 +283,61 @@ max_size = int(0.5 * len(train_ds))
 n_simulations = 5
 
 train_results, test_results = {}, {}
-
-for sim in range(n_simulations):
-    random.seed(sim)
-    all_indices = list(range(len(train_ds)))
-    #all_indices = list(range(len(train_subset)))
-    random.shuffle(all_indices)
-    labeled_indices = all_indices[:initial_size]
-    unlabeled_indices = all_indices[initial_size:]
-
-    while len(labeled_indices) <= max_size:
-        print(f"Training on {len(labeled_indices)} samples...")
-
-        train_dice, test_dice = evaluate_model_on_subset(train_ds, labeled_indices, test_loader)
-        #train_dice, test_dice = evaluate_model_on_subset(train_subset, labeled_indices, test_loader)
-        print(f" Train Dice = {train_dice:.4f}", f" Test Dice = {test_dice:.4f}")
-
-        train_results.setdefault(len(labeled_indices), []).append(train_dice)
-        test_results.setdefault(len(labeled_indices), []).append(test_dice)
-
-        if len(labeled_indices) + query_size > max_size:
-            break
-
-        # Train committee models
-        committee = []
-        for _ in range(3):  # size of committee
-            model = smp.Unet("resnet34", encoder_weights="imagenet", in_channels=1, classes=1, activation="sigmoid").to(device)
-            loader = DataLoader(Subset(train_ds, labeled_indices), batch_size=4, shuffle=True)
-            #loader = DataLoader(Subset(train_subset, labeled_indices), batch_size=4, shuffle=True)
-            optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
-            loss_fn = smp.losses.DiceLoss(mode='binary')
-            model.train()
-            for epoch in range(3):  # small number of epochs
-                for imgs, masks, _ in loader:
-                    imgs, masks = imgs.to(device), masks.to(device)
-                    preds = model(imgs)
-                    loss = loss_fn(preds, masks)
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-            committee.append(model)
-
-        scores = get_qbc_scores(committee, train_ds, unlabeled_indices)
-        #scores = get_qbc_scores(committee, train_subset, unlabeled_indices)
-        scores.sort(reverse=True)  # High variance = high disagreement
-        selected = [idx for _, idx in scores[:query_size]]
-
-        labeled_indices += selected
-        unlabeled_indices = list(set(unlabeled_indices) - set(selected))
+# Added try except to print error if memory runs out
+try:
+    # training loop
+    for sim in range(n_simulations):
+        random.seed(sim)
+        all_indices = list(range(len(train_ds)))
+        #all_indices = list(range(len(train_subset)))
+        random.shuffle(all_indices)
+        labeled_indices = all_indices[:initial_size]
+        unlabeled_indices = all_indices[initial_size:]
+    
+        while len(labeled_indices) <= max_size:
+            print(f"Training on {len(labeled_indices)} samples...")
+    
+            train_dice, test_dice = evaluate_model_on_subset(train_ds, labeled_indices, test_loader)
+            #train_dice, test_dice = evaluate_model_on_subset(train_subset, labeled_indices, test_loader)
+            print(f" Train Dice = {train_dice:.4f}", f" Test Dice = {test_dice:.4f}")
+    
+            train_results.setdefault(len(labeled_indices), []).append(train_dice)
+            test_results.setdefault(len(labeled_indices), []).append(test_dice)
+    
+            if len(labeled_indices) + query_size > max_size:
+                break
+    
+            # Train committee models
+            committee = []
+            for _ in range(3):  # size of committee
+                model = smp.Unet("resnet34", encoder_weights="imagenet", in_channels=1, classes=1, activation="sigmoid").to(device)
+                loader = DataLoader(Subset(train_ds, labeled_indices), batch_size=4, shuffle=True)
+                #loader = DataLoader(Subset(train_subset, labeled_indices), batch_size=4, shuffle=True)
+                optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+                loss_fn = smp.losses.DiceLoss(mode='binary')
+                model.train()
+                for epoch in range(3):  # small number of epochs
+                    for imgs, masks, _ in loader:
+                        imgs, masks = imgs.to(device), masks.to(device)
+                        preds = model(imgs)
+                        loss = loss_fn(preds, masks)
+                        optimizer.zero_grad()
+                        loss.backward()
+                        optimizer.step()
+                committee.append(model)
+    
+            scores = get_qbc_scores(committee, train_ds, unlabeled_indices)
+            #scores = get_qbc_scores(committee, train_subset, unlabeled_indices)
+            scores.sort(reverse=True)  # High variance = high disagreement
+            selected = [idx for _, idx in scores[:query_size]]
+    
+            labeled_indices += selected
+            unlabeled_indices = list(set(unlabeled_indices) - set(selected))
+    # added to check memory issue
+    except RuntimeError as e:
+        if 'out of memory' in str(e):
+            print("OOM Error! Lower batch size or model size.")
+            torch.cuda.empty_cache()
 # End QBC Part
 
 
