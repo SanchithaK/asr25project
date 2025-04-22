@@ -189,13 +189,14 @@ def get_fisher_information_scores(model, dataset, unlabeled_indices):
     model.eval()
     fisher_scores = []
     loss_fn = torch.nn.BCELoss()  # Binary Cross Entropy Loss for binary segmentation
+    epsilon = 1e-10  # Small value to avoid log(0)
 
     for idx in unlabeled_indices:
         img, _, _ = dataset[idx]
         img = img.unsqueeze(0).to(device)
         img.requires_grad = True  # Make the image tensor require gradients
 
-        # Get pseudo-label using the current model
+        # Get the prediction (logits)
         with torch.no_grad():
             pred = model(img)
 
@@ -206,7 +207,7 @@ def get_fisher_information_scores(model, dataset, unlabeled_indices):
         model.zero_grad()
         loss.backward()
 
-        # Compute Fisher score as the sum of squared gradients for each parameter
+        # Compute Fisher Information as the sum of squared gradients for each parameter
         fisher_score = 0.0
         for param in model.parameters():
             if param.grad is not None:
@@ -216,64 +217,60 @@ def get_fisher_information_scores(model, dataset, unlabeled_indices):
 
     return fisher_scores
 
+def get_uncertainty_scores(model, dataset, unlabeled_indices):
+    model.eval()
+    uncertainties = []
+    epsilon = 1e-10  # Small value to avoid log(0)
 
-def get_qbc_scores(committee, dataset, unlabeled_indices):
-    committee_preds = []
-    
-    for model in committee:
-        model.eval()
-        preds = []
-        with torch.no_grad():
-            for idx in unlabeled_indices:
-                img, _, _ = dataset[idx]
-                img = img.unsqueeze(0).to(device)
-                pred = model(img).cpu().numpy()
-                preds.append(pred.squeeze())
-        committee_preds.append(np.array(preds))  # (N_unlabeled, H, W)
+    with torch.no_grad():
+        for idx in unlabeled_indices:
+            img, _, _ = dataset[idx]
+            img = img.unsqueeze(0).to(device)
 
-    committee_preds = np.stack(committee_preds, axis=0)  # (C, N, H, W)
-    var_map = np.var(committee_preds, axis=0)  # (N, H, W)
-    mean_variance = var_map.mean(axis=(1, 2))  # per sample
-    return list(zip(mean_variance, unlabeled_indices))
+            # Predict probabilities using sigmoid
+            pred = model(img).sigmoid()  # Shape: (1, 1, H, W)
 
-def select_batch_using_fisher_and_qbc(committee, dataset, unlabeled_indices, batch_size, fisher_weight=1.0, qbc_weight=1.0):
+            # Remove batch and channel dimensions -> shape: (H, W)
+            probs = pred.squeeze().detach().cpu().numpy()
+
+            # Compute pixel-wise entropy
+            pixel_entropy = -probs * np.log(probs + epsilon) - (1 - probs) * np.log(1 - probs + epsilon)
+
+            # Aggregate entropy (mean over all pixels)
+            uncertainty = np.mean(pixel_entropy)
+
+            uncertainties.append((uncertainty, idx))
+
+    return uncertainties
+
+def select_batch_using_fisher_and_uncertainty(model, dataset, unlabeled_indices, query_size, fisher_weight=1.0, uncertainty_weight=1.0):
     # Compute Fisher Information scores
-    fisher_scores = []
-    for model in committee:
-        fisher_scores.extend(get_fisher_information_scores(model, dataset, unlabeled_indices))
-    
-    fisher_scores.sort(reverse=True)
-    fisher_scores = {idx: score for score, idx in fisher_scores}
+    fisher_scores = get_fisher_information_scores(model, dataset, unlabeled_indices)
 
-    # Compute QBC Disagreement scores
-    qbc_scores = get_qbc_scores(committee, dataset, unlabeled_indices)
-    qbc_scores = {idx: score for score, idx in qbc_scores}
+    # Compute Uncertainty scores
+    uncertainty_scores = get_uncertainty_scores(model, dataset, unlabeled_indices)
 
-    # Combine Fisher Information and QBC scores (weighted sum)
+    # Combine Fisher Information and Uncertainty scores
     combined_scores = []
+    fisher_scores_dict = dict(fisher_scores)
+    uncertainty_scores_dict = dict(uncertainty_scores)
+
     for idx in unlabeled_indices:
-        fisher_score = fisher_scores.get(idx, 0)
-        qbc_score = qbc_scores.get(idx, 0)
-        combined_score = fisher_weight * fisher_score + qbc_weight * qbc_score
+        fisher_score = fisher_scores_dict.get(idx, 0)
+        uncertainty_score = uncertainty_scores_dict.get(idx, 0)
+        
+        # Combine both scores (you can tweak the weights as needed)
+        combined_score = fisher_weight * fisher_score + uncertainty_weight * uncertainty_score
         combined_scores.append((combined_score, idx))
-    
-    # Sort based on combined score
+
+    # Sort by combined score (higher score means more uncertain and impactful)
     combined_scores.sort(reverse=True)
     
-    # Select top `batch_size` samples
-    selected = [idx for _, idx in combined_scores[:batch_size]]
+    # Select top `query_size` samples
+    selected = [idx for _, idx in combined_scores[:query_size]]
+    
     return selected
 
-# Initialize your committee of models
-def create_committee(n_models=5):
-    committee = []
-    for _ in range(n_models):
-        model = smp.Unet("resnet34", encoder_weights="imagenet", in_channels=1, classes=1, activation="sigmoid").to(device)
-        committee.append(model)
-    return committee
-
-# Create the committee before the training loop
-committee = create_committee(n_models=3)  # Create a committee with 5 models (adjust as needed)
 
 # Pass committee into the select_batch_using_fisher_and_qbc function
 
@@ -290,55 +287,58 @@ train_results, test_results = {}, {}
 for sim in range(n_simulations):
     set_all_seeds(sim)
     unlabeled_indices = all_indices.copy()
-    labeled_indices = []
+    labeled_indices = []  # Initially empty labeled set
 
-    # Initialize empty committee
-    committee = create_committee(n_models=3)
     warm_model = None
-
     for i, size in enumerate(dataset_sizes):
         reset_model = USE_WARM_START and RESET_EVERY_N > 0 and i % RESET_EVERY_N == 0
-        if reset_model:
-            warm_model = None
-            committee = create_committee(n_models=3)  # Reset committee if needed
 
+        if reset_model or warm_model is None:
+            warm_model = None  # Reset model so a new one is initialized in evaluate_model_on_subset
+
+        # Select the training data
         if i == 0:
-            # Random initial sampling
+            # Randomly select initial labeled batch
             labeled_indices = random.sample(unlabeled_indices, initial_size)
             unlabeled_indices = [idx for idx in unlabeled_indices if idx not in labeled_indices]
         else:
-            # Use committee to select next batch
-            new_batch_indices = select_batch_using_fisher_and_qbc(
-                committee, train_ds, unlabeled_indices, batch_size=batch_size
+            # Train model on current labeled set to use it for batch selection
+            current_subset = labeled_indices
+            _, _, warm_model = evaluate_model_on_subset(
+                train_ds, current_subset, test_subset_loader,
+                warm_model=None, seed=sim
+            )
+
+            # Select new batch using Fisher + Uncertainty strategy
+            new_batch_indices = select_batch_using_fisher_and_uncertainty(
+                warm_model, train_ds, unlabeled_indices, query_size=batch_size
             )
             labeled_indices.extend(new_batch_indices)
             unlabeled_indices = [idx for idx in unlabeled_indices if idx not in new_batch_indices]
 
+        # Train model on updated labeled set
         current_subset = labeled_indices
         print(f"  Training on {len(current_subset)} samples...", end="")
 
-        # Train single warm model for Dice eval
         train_dice, test_dice, warm_model = evaluate_model_on_subset(
             train_ds, current_subset, test_subset_loader,
             warm_model=warm_model if USE_WARM_START else None, seed=sim
         )
 
-        # Also train the committee models on current subset
-        for cm in committee:
-            evaluate_model_on_subset(train_ds, current_subset, test_subset_loader, warm_model=cm, seed=sim)
-
-        ## Prediction
+        # Save prediction on a single test image for inspection
         for img, mask, fname in test_subset:
             base_name = os.path.splitext(os.path.basename(fname))[0]
             file_name = f"{base_name}_sim_{sim}_train_size_{size}"
             show_prediction(warm_model, img, mask, results_dir, filename=file_name)
-            break  # Just one prediction
+            break  # Show only one image
 
+        # Save model
         model_path = f"{model_dir}/model_sim{sim}_size{size}.pt"
         torch.save(warm_model.to('cpu').state_dict(), model_path)
-        print(f"Saved model to {model_path}")
+        print(f" Saved model to {model_path}")
         print(f" Train Dice = {train_dice:.4f} | Test Dice = {test_dice:.4f}")
 
+        # Log results
         train_results.setdefault(size, []).append(train_dice)
         test_results.setdefault(size, []).append(test_dice)
 
@@ -401,7 +401,7 @@ plt.title(f"{plots_title_prefix}: Mean Training Dice Score vs Training Set Size"
 plt.xlabel("Training Set Size")
 plt.ylabel("Mean Train Set Dice Score")
 plt.grid(True)
-plt.savefig(f"{plot_dir}/MeanTrainingDiceScore_QBC_Hoi.png", bbox_inches='tight')
+plt.savefig(f"{plot_dir}/MeanTrainingDiceScore_US_Hoi.png", bbox_inches='tight')
 plt.show()
 
 means_test = np.array([np.mean(test_results[s]) for s in dataset_sizes])
@@ -412,7 +412,7 @@ plt.title(f"{plots_title_prefix}: Mean Test Set Dice Score vs Training Set Size"
 plt.xlabel("Training Set Size")
 plt.ylabel("Mean Test Set Dice Score")
 plt.grid(True)
-plt.savefig(f"{plot_dir}/MeanTestDiceScore_QBC_Hoi.png", bbox_inches='tight')
+plt.savefig(f"{plot_dir}/MeanTestDiceScore_US_Hoi.png", bbox_inches='tight')
 plt.show()
 
 
@@ -432,16 +432,16 @@ plt.grid(True)
 
 # Save or show
 plt.tight_layout()
-plt.savefig(f"{plot_dir}/MeanBothDiceScore_QBC_Hoi.png", dpi=300)
+plt.savefig(f"{plot_dir}/MeanBothDiceScore_US_Hoi.png", dpi=300)
 plt.show()
 
 print("Saved Figures")
 
 train_df = pd.DataFrame(train_results)
-train_df.to_csv(f"{plot_dir}/TrainDiceScores_QBC_Hoi.csv", index=False)
+train_df.to_csv(f"{plot_dir}/TrainDiceScores_US_Hoi.csv", index=False)
 
 test_df = pd.DataFrame(test_results)
-test_df.to_csv(f"{plot_dir}/TestDiceScores_QBC_Hoi.csv", index=False)
+test_df.to_csv(f"{plot_dir}/TestDiceScores_US_Hoi.csv", index=False)
 
 print("Saved QBC train/test Dice scores to CSV")
 
