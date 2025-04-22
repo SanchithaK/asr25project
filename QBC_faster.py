@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+import boto3
+
 def set_all_seeds(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -444,6 +446,21 @@ test_df = pd.DataFrame(test_results)
 test_df.to_csv(f"{plot_dir}/TestDiceScores_QBC_Hoi.csv", index=False)
 
 print("Saved QBC train/test Dice scores to CSV")
+
+# To save to s3 bucket:
+BUCKET_NAME = 'asr25data'
+
+# Initialize the boto3 S3 client
+s3 = boto3.client('s3')
+
+# Upload individual files
+#s3.upload_file('resnet34_model_all_data.pt', BUCKET_NAME, 'resnet34_model_all_data.pt')
+for filename in os.listdir(plot_dir):
+    local_path = os.path.join(plot_dir, filename)
+    s3_path = f"{plot_dir}/{filename}"
+    if os.path.isfile(local_path):
+        print(f"Uploading {local_path} to s3://{BUCKET_NAME}/{s3_path}")
+        s3.upload_file(local_path, BUCKET_NAME, s3_path)
 
 """# Passive
 means_train = np.array([np.mean(train_results[s]) for s in dataset_sizes])

@@ -13,21 +13,6 @@ import matplotlib.pyplot as plt
 
 import boto3
 
-USE_WARM_START = True
-RESET_EVERY_N = 3  
-
-
-name_extension = "passive_learning_partial_training_aws"
-model_dir = f"{name_extension}/models"
-results_dir = f'{name_extension}/results'
-title_prefix = "Passive Learning"
-plot_dir = f"{name_extension}/plots"
-plots_title_prefix = "Passive Learning"
-
-os.makedirs(results_dir, exist_ok=True)
-os.makedirs(model_dir, exist_ok=True)
-os.makedirs(plot_dir, exist_ok=True)
-
 def set_all_seeds(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -200,7 +185,7 @@ def evaluate_model_on_subset(dataset, subset_indices, test_loader, epochs=5, war
 
     return final_train_dice, final_test_dice, model
 
-""" # QBC Training"""
+""" # US Training"""
 
 def get_fisher_information_scores(model, dataset, unlabeled_indices):
     model.eval()
