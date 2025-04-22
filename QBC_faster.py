@@ -190,34 +190,33 @@ def evaluate_model_on_subset(dataset, subset_indices, test_loader, epochs=5, war
 def get_fisher_information_scores(model, dataset, unlabeled_indices):
     model.eval()
     fisher_scores = []
-    loss_fn = torch.nn.BCELoss()  # Binary Cross Entropy Loss for binary segmentation
+    loss_fn = torch.nn.BCELoss()
+    epsilon = 1e-10
 
     for idx in unlabeled_indices:
         img, _, _ = dataset[idx]
         img = img.unsqueeze(0).to(device)
-        img.requires_grad = True  # Make the image tensor require gradients
 
-        # Get pseudo-label using the current model
         with torch.no_grad():
-            pred = model(img)
+            pseudo_label = model(img)
 
-        # Compute the loss between the prediction and the pseudo-label
-        loss = loss_fn(pred, pred)
+        img.requires_grad = True  # Still not necessary unless doing gradient w.r.t. input
 
-        # Backward pass to get gradients w.r.t. the model's output
+        # Forward pass with gradient tracking
+        pred = model(img)
+        loss = loss_fn(pred, pseudo_label.detach())
+
         model.zero_grad()
         loss.backward()
 
-        # Compute Fisher score as the sum of squared gradients for each parameter
         fisher_score = 0.0
         for param in model.parameters():
             if param.grad is not None:
-                fisher_score += (param.grad ** 2).sum().item()  # Sum of squared gradients
+                fisher_score += (param.grad ** 2).sum().item()
 
         fisher_scores.append((fisher_score, idx))
 
     return fisher_scores
-
 
 def get_qbc_scores(committee, dataset, unlabeled_indices):
     committee_preds = []
