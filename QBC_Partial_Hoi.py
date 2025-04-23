@@ -414,7 +414,7 @@ for sim in range(n_simulations):
         pl_test_results.setdefault(size, []).append(test_dice)
 
 
-# Function to plot train/test dice scores
+# Function to plot train/test dice scores 
 def plot_train_test(train_results, test_results, dataset_sizes, title, filename_prefix, color_train, color_test):
     train_means = np.array([np.mean(train_results[s]) for s in dataset_sizes])
     train_stds = np.array([np.std(train_results[s]) for s in dataset_sizes])
@@ -446,7 +446,11 @@ file1 = plot_train_test(train_results, test_results, dataset_sizes,
                         "QBC: Dice Scores vs Training Set Size",
                         "QBC_DiceScore_hoi", color_train="blue", color_test="orange")
 
-file2 = plot_train_test(pl_train_results, pl_test_results, dataset_sizes,
+
+
+pl_dataset_sizes = sorted(pl_train_results.keys())
+
+file2 = plot_train_test(pl_train_results, pl_test_results, pl_dataset_sizes,
                         "Passive Learning - QBC: Dice Scores vs Training Set Size",
                         "PassiveLearningQBC__hoi_DiceScores", color_train="green", color_test="red")
 
