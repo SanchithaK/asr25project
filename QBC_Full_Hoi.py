@@ -20,7 +20,16 @@ import heapq
 
 import boto3
 
-os.makedirs("results", exist_ok=True)
+name_extension = "QBC_full_training_Hoi"
+model_dir = f"{name_extension}/models"
+results_dir = f'{name_extension}/results'
+title_prefix = "QBC (hoi) Learning"
+plot_dir = f"{name_extension}/plots"
+plots_title_prefix = "QBC (hoi) Learning"
+
+os.makedirs(results_dir, exist_ok=True)
+os.makedirs(model_dir, exist_ok=True)
+os.makedirs(plot_dir, exist_ok=True)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -388,7 +397,7 @@ for sim in range(n_simulations):
 # End QBC Part
 
 
-# Passive Learning Part
+"""# Passive Learning Part
 pl_train_results, pl_test_results = {}, {}
 for sim in range(n_simulations):
     random.seed(sim)
@@ -401,7 +410,7 @@ for sim in range(n_simulations):
         #train_dice, test_dice = evaluate_model_on_subset(train_subset, current_subset, test_loader)
         print(f" Train Dice = {train_dice:.4f}", f" Test Dice = {test_dice:.4f}")
         pl_train_results.setdefault(size, []).append(train_dice)
-        pl_test_results.setdefault(size, []).append(test_dice)
+        pl_test_results.setdefault(size, []).append(test_dice)"""
 
 
 # Function to plot train/test dice scores
@@ -435,13 +444,13 @@ dataset_sizes = sorted(train_results.keys())
 file1 = plot_train_test(train_results, test_results, dataset_sizes,
                         "QBC: Dice Scores vs Training Set Size",
                         "QBC_Full_DiceScores", color_train="blue", color_test="orange")
-
+"""
 file2 = plot_train_test(pl_train_results, pl_test_results, dataset_sizes,
                         "Passive Learning - QBC: Dice Scores vs Training Set Size",
-                        "PassiveLearningQBC_Full_DiceScores", color_train="green", color_test="red")
+                        "PassiveLearningQBC_Full_DiceScores", color_train="green", color_test="red")"""
 
 # === Comparison Plot ===
-def plot_combined_comparison(dataset_sizes, us_train, us_test, pl_train, pl_test):
+"""def plot_combined_comparison(dataset_sizes, us_train, us_test, pl_train, pl_test):
     def get_stats(data):
         return np.array([np.mean(data[s]) for s in dataset_sizes]), np.array([np.std(data[s]) for s in dataset_sizes])
     
@@ -474,7 +483,7 @@ def plot_combined_comparison(dataset_sizes, us_train, us_test, pl_train, pl_test
     print(f"Saved {filename}")
     return filename
 
-file3 = plot_combined_comparison(dataset_sizes, train_results, test_results, pl_train_results, pl_test_results)
+file3 = plot_combined_comparison(dataset_sizes, train_results, test_results, pl_train_results, pl_test_results)"""
 
 # === Save CSVs ===
 csv_files = []
@@ -488,8 +497,8 @@ def save_df(data, name):
 
 save_df(train_results, "QBCSamplingTrain_Full_DiceScores")
 save_df(test_results, "QBCSamplingTest_Full_DiceScores")
-save_df(pl_train_results, "PassiveLearningQBC_Full_TrainDiceScores")
-save_df(pl_test_results, "PassiveLearningQBC_Full_TestDiceScores")
+"""save_df(pl_train_results, "PassiveLearningQBC_Full_TrainDiceScores")
+save_df(pl_test_results, "PassiveLearningQBC_Full_TestDiceScores")"""
 
 
 print("Saved train/test Dice scores to CSV")
@@ -517,7 +526,7 @@ s3 = boto3.client('s3')
 BUCKET_NAME = 'asr25data'
 s3 = boto3.client('s3')
 
-all_files = [file1, file2, file3] + csv_files
+all_files = [file1] + csv_files
 for fname in all_files:
     s3.upload_file(fname, BUCKET_NAME, f"results/{fname}")
     print(f"Uploaded {fname} to s3://{BUCKET_NAME}/{fname}")
